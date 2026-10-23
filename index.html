@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>signal garden // arg radio engine</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://unpkg.com/globe.gl@2.34.3/dist/globe.gl.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; overflow: hidden; height: 100%;
+    background: #000;
+    color: #d1d5db;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  #globeViz { position: fixed; inset: 0; z-index: 0; }
+
+  .led-font { font-family: 'Orbitron', monospace; letter-spacing: 1px; }
+
+  .glass {
+    background: rgba(10, 14, 12, 0.82);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(52, 211, 153, 0.15);
+  }
+
+  .scanlines::before {
+    content: " ";
+    position: absolute; inset: 0;
+    background: linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.35) 50%);
+    background-size: 100% 4px;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: #1f2e26; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .pulse-gold {
+    animation: pulseGold 1.6s ease-in-out infinite;
+  }
+  @keyframes pulseGold {
+    0%, 100% { box-shadow: 0 0 6px 2px rgba(255,176,0,0.6); }
+    50% { box-shadow: 0 0 16px 6px rgba(255,176,0,0.9); }
+  }
+
+  .eq-bar { animation: eqbar 0.9s ease-in-out infinite; transform-origin: bottom; }
+  .eq-bar:nth-child(2) { animation-delay: 0.15s; }
+  .eq-bar:nth-child(3) { animation-delay: 0.3s; }
+  .eq-bar:nth-child(4) { animation-delay: 0.45s; }
+  @keyframes eqbar {
+    0%, 100% { transform: scaleY(0.2); }
+    50% { transform: scaleY(1); }
+  }
+
+  input[type="text"], input[type="number"], input[type="datetime-local"], select, textarea {
+    color-scheme: dark;
+  }
+
+  .tactile-btn {
+    background: linear-gradient(145deg, #1c2620, #131916);
+    box-shadow: 2px 2px 5px #0a0d0b, -1px -1px 3px #263229;
+    border: 1px solid #2f3b34;
+  }
+  .tactile-btn:active { box-shadow: inset 2px 2px 4px #0a0d0b; }
+</style>
+</head>
+<body class="text-neutral-300">
+
+<div id="globeViz"></div>
+
+<!-- Top bar -->
+<div class="fixed top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-3 glass">
+  <div class="flex items-center gap-3">
+    <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+    <h1 class="led-font text-emerald-400 text-sm sm:text-base tracking-widest font-bold">SIGNAL // GARDEN</h1>
+    <span class="hidden sm:inline text-[10px] text-neutral-500 uppercase tracking-widest">live global radio + hidden transmissions</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <div class="relative">
+      <input id="search-input" type="text" placeholder="search station or country..."
+        class="bg-neutral-900/80 border border-neutral-700 text-xs px-3 py-1.5 rounded w-40 sm:w-64 focus:outline-none focus:border-emerald-600">
+      <div id="search-results" class="hidden absolute mt-1 w-full sm:w-80 right-0 max-h-72 overflow-y-auto bg-neutral-950 border border-neutral-800 rounded shadow-2xl text-xs z-30"></div>
+    </div>
+    <button id="shuffle-btn" title="Random station" class="tactile-btn text-emerald-300 px-3 py-1.5 rounded text-xs"><i class="fa-solid fa-shuffle"></i></button>
+    <button id="open-gm-panel" class="bg-emerald-950 hover:bg-emerald-900 border border-emerald-700 text-emerald-300 px-3 py-1.5 rounded text-xs flex items-center gap-2">
+      <i class="fa-solid fa-gear"></i> <span class="hidden sm:inline">GM CONFIG</span>
+    </button>
+  </div>
+</div>
+
+<!-- Discovery overlay (secret ARG station proximity) -->
+<div id="discovery-toast" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-30 glass rounded-lg px-5 py-3 text-center max-w-sm">
+  <div id="discovery-body"></div>
+</div>
+
+<!-- Now playing bar -->
+<div id="now-playing" class="hidden fixed bottom-0 left-0 right-0 z-20 glass scanlines relative px-4 py-3 flex items-center gap-4">
+  <div class="flex items-end gap-0.5 h-6 w-6 shrink-0">
+    <div class="eq-bar w-1 h-full bg-emerald-500 rounded"></div>
+    <div class="eq-bar w-1 h-full bg-emerald-500 rounded"></div>
+    <div class="eq-bar w-1 h-full bg-emerald-500 rounded"></div>
+    <div class="eq-bar w-1 h-full bg-emerald-500 rounded"></div>
+  </div>
+  <div class="min-w-0 flex-1">
+    <div id="np-title" class="text-sm text-neutral-100 font-bold truncate">—</div>
+    <div id="np-sub" class="text-[10px] text-neutral-500 uppercase tracking-wider truncate">—</div>
+  </div>
+  <button id="np-toggle" class="tactile-btn text-emerald-300 w-9 h-9 rounded-full flex items-center justify-center">
+    <i class="fa-solid fa-pause"></i>
+  </button>
+  <div class="hidden sm:flex items-center gap-2 w-32">
+    <i class="fa-solid fa-volume-low text-neutral-500 text-xs"></i>
+    <input id="np-volume" type="range" min="0" max="1" step="0.01" value="0.8" class="w-full accent-emerald-500">
+  </div>
+  <button id="np-stop" class="tactile-btn text-red-400 w-9 h-9 rounded-full flex items-center justify-center">
+    <i class="fa-solid fa-power-off"></i>
+  </button>
+</div>
+
+<audio id="live-audio" crossorigin="anonymous"></audio>
+
+<!-- Code entry modal -->
+<div id="code-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+  <div class="glass rounded-xl p-6 w-full max-w-sm">
+    <h2 class="led-font text-amber-400 text-sm tracking-widest mb-1"><i class="fa-solid fa-tower-broadcast mr-2"></i>TRANSMISSION DETECTED</h2>
+    <p id="code-modal-clue" class="text-xs text-neutral-400 mb-4"></p>
+    <input id="code-modal-input" type="text" placeholder="ENTER ACCESS CODE" class="w-full bg-black border border-amber-800 text-amber-300 tracking-[0.3em] text-center py-2 rounded mb-2 text-sm led-font uppercase focus:outline-none focus:border-amber-500">
+    <p id="code-modal-error" class="hidden text-[11px] text-red-400 mb-2">ACCESS DENIED — INCORRECT CODE</p>
+    <div class="flex gap-2 mt-2">
+      <button id="code-modal-submit" class="flex-1 bg-amber-800 hover:bg-amber-700 text-white text-xs font-bold py-2 rounded">DECODE</button>
+      <button id="code-modal-cancel" class="flex-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold py-2 rounded">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<!-- Decoded message modal -->
+<div id="message-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+  <div class="glass rounded-xl p-6 w-full max-w-md">
+    <h2 class="led-font text-emerald-400 text-sm tracking-widest mb-3"><i class="fa-solid fa-lock-open mr-2"></i><span id="message-modal-title">SIGNAL DECODED</span></h2>
+    <div id="message-modal-body" class="bg-black border-l-2 border-emerald-500 rounded p-3 text-sm text-neutral-200 max-h-56 overflow-y-auto"></div>
+    <div class="flex gap-2 mt-4">
+      <button id="message-modal-replay" class="flex-1 bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold py-2 rounded"><i class="fa-solid fa-rotate-right mr-1"></i> REPLAY</button>
+      <button id="message-modal-close" class="flex-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold py-2 rounded">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- GM Config Modal -->
+<div id="gm-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+  <div class="bg-neutral-900 border border-neutral-700 w-full max-w-3xl rounded-xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto font-mono">
+    <div class="flex justify-between items-center border-b border-neutral-800 pb-3 mb-4">
+      <h2 class="text-lg font-bold text-emerald-400 flex items-center gap-2"><i class="fa-solid fa-sliders"></i> ARG GAME MASTER CONFIGURATION</h2>
+      <button id="close-gm-panel" class="text-neutral-400 hover:text-white text-xl">&times;</button>
+    </div>
+
+    <p class="text-xs text-neutral-400 mb-4">
+      Secret stations are invisible on the globe until a player zooms in near their coordinates during the active window — real stations are untouched, pulled live from the public Radio Browser directory. Config saves to this browser's local storage.
+    </p>
+
+    <div class="mb-6">
+      <h3 class="text-xs font-bold text-neutral-300 mb-2 uppercase">HIDDEN FREQUENCY REGISTRY</h3>
+      <div class="space-y-3" id="gm-station-list"></div>
+      <p id="gm-empty-note" class="text-xs text-neutral-600 italic hidden">No secret stations configured yet.</p>
+    </div>
+
+    <div class="bg-neutral-950 p-4 border border-neutral-800 rounded-lg space-y-3">
+      <h3 class="text-xs font-bold text-amber-400 uppercase" id="gm-form-heading">ADD NEW HIDDEN STATION</h3>
+      <input type="hidden" id="edit-id" value="">
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[10px] text-neutral-400">STATION TITLE</label>
+          <input id="new-title" type="text" placeholder="e.g. Numbers Station KILO-7" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+        <div>
+          <label class="block text-[10px] text-neutral-400">UNLOCK CODE</label>
+          <input id="new-code" type="text" placeholder="e.g. 8821" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+        <div>
+          <label class="block text-[10px] text-neutral-400">LATITUDE</label>
+          <input id="new-lat" type="number" step="0.0001" placeholder="e.g. 51.5074" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+        <div>
+          <label class="block text-[10px] text-neutral-400">LONGITUDE</label>
+          <input id="new-lng" type="number" step="0.0001" placeholder="e.g. -0.1278" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+        <button id="use-current-view" class="tactile-btn text-emerald-300 text-[10px] py-1.5 rounded"><i class="fa-solid fa-crosshairs mr-1"></i>USE CURRENT GLOBE VIEW</button>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[10px] text-neutral-400">ACTIVE FROM</label>
+          <input id="new-active-from" type="datetime-local" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+        <div>
+          <label class="block text-[10px] text-neutral-400">ACTIVE UNTIL</label>
+          <input id="new-active-until" type="datetime-local" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-[10px] text-neutral-400">MARKER VISIBILITY</label>
+        <select id="new-marker-visible" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+          <option value="false">Hidden — only detectable by zooming near coordinates</option>
+          <option value="true">Faint visible marker (soft clue, always on globe)</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-[10px] text-neutral-400">PAYLOAD TYPE</label>
+        <select id="new-type" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+          <option value="speech">Spoken Audio / Text-To-Speech</option>
+          <option value="morse">Morse Code Synthesizer</option>
+          <option value="audio">Audio File URL (prerecorded)</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-[10px] text-neutral-400" id="payload-label">TRANSCRIPT / SPEECH / MORSE PAYLOAD</label>
+        <textarea id="new-payload" rows="2" placeholder="Text to read aloud, convert to Morse, or an audio file URL..." class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs"></textarea>
+      </div>
+      <div>
+        <label class="block text-[10px] text-neutral-400">GM CLUE NOTE (shown only in this panel)</label>
+        <input id="new-clue" type="text" placeholder="Internal note about where the real-world clue points" class="w-full bg-neutral-900 border border-neutral-700 px-3 py-1.5 rounded text-white text-xs">
+      </div>
+
+      <div class="flex gap-2">
+        <button id="save-station-btn" class="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2 rounded text-xs">+ SAVE HIDDEN STATION</button>
+        <button id="cancel-edit-btn" class="hidden bg-neutral-700 hover:bg-neutral-600 text-white font-bold py-2 px-4 rounded text-xs">CANCEL EDIT</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------
+   SIGNAL // GARDEN — radio.garden-style globe with a hidden ARG layer
+   Real stations: public Radio Browser API (community-run, open directory
+   of publicly streamable internet radio — the legitimate equivalent of
+   radio.garden's own aggregation, since that backend is proprietary).
+   Secret stations: game-master defined, stored in localStorage.
+--------------------------------------------------------------- */
+
+const RB_MIRRORS = [
+  'https://de1.api.radio-browser.info',
+  'https://nl1.api.radio-browser.info',
+  'https://at1.api.radio-browser.info'
+];
+const SECRET_KEY = 'sg_arg_secret_stations_v1';
+const SOLVED_KEY = 'sg_arg_solved_v1';
+const STATION_CACHE_KEY = 'sg_arg_station_cache_v1';
+const STATION_CACHE_TTL = 1000 * 60 * 60 * 12; // 12h
+
+let realStations = [];
+let secretStations = loadSecrets();
+let solvedIds = loadSolved();
+let activeDiscovery = null; // secret station currently in range
+let currentlyPlaying = null; // {kind:'live'|'secret', id, title}
+
+/* ---------- persistence ---------- */
+function loadSecrets() {
+  try { return JSON.parse(localStorage.getItem(SECRET_KEY)) || defaultSecrets(); }
+  catch (e) { return defaultSecrets(); }
+}
+function saveSecrets() { localStorage.setItem(SECRET_KEY, JSON.stringify(secretStations)); }
+function loadSolved() {
+  try { return JSON.parse(localStorage.getItem(SOLVED_KEY)) || {}; }
+  catch (e) { return {}; }
+}
+function saveSolved() { localStorage.setItem(SOLVED_KEY, JSON.stringify(solvedIds)); }
+
+function defaultSecrets() {
+  const now = new Date();
+  const from = new Date(now.getTime() - 1000 * 60 * 60);
+  const until = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 7);
+  return [{
+    id: 'demo-1',
+    title: 'PARADISE REFUGE BEACON',
+    code: '8821',
+    lat: 51.5074,
+    lng: -0.1278,
+    activeFrom: from.toISOString(),
+    activeUntil: until.toISOString(),
+    markerVisible: false,
+    type: 'morse',
+    payload: 'PARADISE REFUGE SAFE PASSCODE 8821',
+    clue: 'Demo station — zoom into London to test the discovery mechanic.'
+  }];
+}
+
+/* ---------- geo utils ---------- */
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function isWithinWindow(st) {
+  const now = Date.now();
+  return now >= new Date(st.activeFrom).getTime() && now <= new Date(st.activeUntil).getTime();
+}
+
+/* ---------- globe setup ---------- */
+const world = Globe()(document.getElementById('globeViz'))
+  .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+  .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+  .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+  .pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0)
+  .pointAltitude(0.005)
+  .pointRadius(d => d.__secret ? 0.35 : 0.22)
+  .pointColor(d => d.__secret ? '#ffb000' : '#34d399')
+  .pointLabel(d => d.__secret ? '' : `<div style="font-family:monospace;background:#000;padding:4px 8px;border:1px solid #34d399;border-radius:4px;color:#d1fae5;font-size:11px">
+      <b>${escapeHtml(d.name)}</b><br/><span style="color:#6ee7b7">${escapeHtml(d.country || '')}</span>
+    </div>`)
+  .onPointClick(handlePointClick)
+  .pointsData([]);
+
+world.controls().autoRotate = true;
+world.controls().autoRotateSpeed = 0.35;
+world.controls().addEventListener('start', () => { world.controls().autoRotate = false; });
+
+function refreshPoints() {
+  const visibleSecrets = secretStations
+    .filter(s => s.markerVisible)
+    .map(s => ({ __secret: true, id: s.id, name: s.title, lat: s.lat, lng: s.lng }));
+  world.pointsData([...realStations, ...visibleSecrets]);
+}
+
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ---------- fetch real stations ---------- */
+async function loadRealStations() {
+  const cached = readStationCache();
+  if (cached) { realStations = cached; refreshPoints(); return; }
+
+  for (const base of RB_MIRRORS) {
+    try {
+      const res = await fetch(`${base}/json/stations/search?hidebroken=true&has_geo_info=true&order=clickcount&reverse=true&limit=1200`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      realStations = data
+        .filter(s => s.geo_lat && s.geo_long && (s.url_resolved || s.url))
+        .map(s => ({
+          name: s.name?.trim() || 'UNKNOWN STATION',
+          country: s.country,
+          lat: s.geo_lat,
+          lng: s.geo_long,
+          url: s.url_resolved || s.url
+        }));
+      writeStationCache(realStations);
+      refreshPoints();
+      document.getElementById('station-load-note')?.remove();
+      return;
+    } catch (e) { /* try next mirror */ }
+  }
+  console.warn('Could not reach any Radio Browser mirror — live stations unavailable this session.');
+}
+function readStationCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STATION_CACHE_KEY));
+    if (raw && Date.now() - raw.ts < STATION_CACHE_TTL) return raw.stations;
+  } catch (e) {}
+  return null;
+}
+function writeStationCache(stations) {
+  try { localStorage.setItem(STATION_CACHE_KEY, JSON.stringify({ ts: Date.now(), stations })); } catch (e) {}
+}
+
+/* ---------- audio: live streams ---------- */
+const liveAudio = document.getElementById('live-audio');
+liveAudio.volume = 0.8;
+
+function playLiveStation(st) {
+  stopSecretAudio();
+  liveAudio.src = st.url;
+  liveAudio.play().catch(() => {});
+  currentlyPlaying = { kind: 'live', title: st.name, sub: st.country || 'LIVE STREAM' };
+  showNowPlaying();
+}
+
+function handlePointClick(pt) {
+  if (pt.__secret) return; // visible secret markers are decorative; discovery flow handles interaction
+  world.pointOfView({ lat: pt.lat, lng: pt.lng, altitude: 0.4 }, 1200);
+  playLiveStation(pt);
+}
+
+/* ---------- now playing bar ---------- */
+const npBar = document.getElementById('now-playing');
+function showNowPlaying() {
+  document.getElementById('np-title').innerText = currentlyPlaying.title;
+  document.getElementById('np-sub').innerText = currentlyPlaying.sub || '';
+  document.getElementById('np-toggle').innerHTML = '<i class="fa-solid fa-pause"></i>';
+  npBar.classList.remove('hidden');
+}
+document.getElementById('np-toggle').addEventListener('click', () => {
+  if (currentlyPlaying?.kind === 'live') {
+    if (liveAudio.paused) { liveAudio.play(); document.getElementById('np-toggle').innerHTML = '<i class="fa-solid fa-pause"></i>'; }
+    else { liveAudio.pause(); document.getElementById('np-toggle').innerHTML = '<i class="fa-solid fa-play"></i>'; }
+  } else if (currentlyPlaying?.kind === 'secret') {
+    toggleSecretPause();
+  }
+});
+document.getElementById('np-stop').addEventListener('click', () => {
+  liveAudio.pause(); liveAudio.src = '';
+  stopSecretAudio();
+  currentlyPlaying = null;
+  npBar.classList.add('hidden');
+});
+document.getElementById('np-volume').addEventListener('input', (e) => {
+  liveAudio.volume = parseFloat(e.target.value);
+  if (secretGain) secretGain.gain.setValueAtTime(parseFloat(e.target.value) * 0.6, secretCtx.currentTime);
+});
+
+/* ---------- secret payload audio (speech / morse / file) ---------- */
+let secretCtx = null, secretOsc = null, secretGain = null, morseInterval = null;
+let speechSynth = window.speechSynthesis;
+let currentUtterance = null;
+let secretAudioEl = null;
+
+const MORSE_MAP = {'A':'.-','B':'-...','C':'-.-.','D':'-..','E':'.','F':'..-.','G':'--.','H':'....','I':'..','J':'.---','K':'-.-','L':'.-..','M':'--','N':'-.','O':'---','P':'.--.','Q':'--.-','R':'.-.','S':'...','T':'-','U':'..-','V':'...-','W':'.--','X':'-..-','Y':'-.--','Z':'--..','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.','0':'-----',' ':'/'};
+
+function initSecretAudio() {
+  if (secretCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  secretCtx = new AC();
+  secretGain = secretCtx.createGain();
+  secretGain.gain.setValueAtTime(0.5, secretCtx.currentTime);
+  secretGain.connect(secretCtx.destination);
+}
+
+function playSecretPayload(station) {
+  stopSecretAudio();
+  currentlyPlaying = { kind: 'secret', title: station.title, sub: 'DECODED TRANSMISSION' };
+  showNowPlaying();
+
+  if (station.type === 'speech') {
+    currentUtterance = new SpeechSynthesisUtterance(station.payload);
+    currentUtterance.rate = 0.9; currentUtterance.pitch = 0.8;
+    speechSynth.speak(currentUtterance);
+  } else if (station.type === 'morse') {
+    initSecretAudio();
+    const seq = station.payload.toUpperCase().split('').map(c => MORSE_MAP[c] || '').join(' ');
+    let i = 0;
+    secretOsc = secretCtx.createOscillator();
+    secretOsc.type = 'sine';
+    secretOsc.frequency.setValueAtTime(700, secretCtx.currentTime);
+    secretOsc.connect(secretGain);
+    secretOsc.start();
+    morseInterval = setInterval(() => {
+      if (i >= seq.length) { clearInterval(morseInterval); try { secretOsc.stop(); } catch(e){} return; }
+      const sym = seq[i];
+      if (sym === '.') { secretGain.gain.setValueAtTime(0.5, secretCtx.currentTime); secretGain.gain.setValueAtTime(0, secretCtx.currentTime + 0.08); }
+      else if (sym === '-') { secretGain.gain.setValueAtTime(0.5, secretCtx.currentTime); secretGain.gain.setValueAtTime(0, secretCtx.currentTime + 0.24); }
+      i++;
+    }, 130);
+  } else if (station.type === 'audio') {
+    secretAudioEl = new Audio(station.payload);
+    secretAudioEl.volume = parseFloat(document.getElementById('np-volume').value);
+    secretAudioEl.play().catch(() => {});
+  }
+}
+function stopSecretAudio() {
+  if (morseInterval) clearInterval(morseInterval);
+  if (secretOsc) { try { secretOsc.stop(); } catch(e){} secretOsc = null; }
+  if (speechSynth) speechSynth.cancel();
+  if (secretAudioEl) { secretAudioEl.pause(); secretAudioEl = null; }
+}
+function toggleSecretPause() {
+  if (secretAudioEl) { secretAudioEl.paused ? secretAudioEl.play() : secretAudioEl.pause(); }
+}
+
+/* ---------- discovery loop ---------- */
+const DISCOVERY_ALTITUDE_THRESHOLD = 0.55; // must be reasonably zoomed in
+setInterval(() => {
+  const pov = world.pointOfView();
+  if (!pov) return;
+
+  if (pov.altitude > DISCOVERY_ALTITUDE_THRESHOLD) {
+    if (activeDiscovery) clearDiscovery();
+    return;
+  }
+
+  const rangeKm = Math.max(60, pov.altitude * 500);
+  let nearest = null, nearestDist = Infinity;
+  secretStations.forEach(st => {
+    const d = haversineKm(pov.lat, pov.lng, st.lat, st.lng);
+    if (d < rangeKm && d < nearestDist) { nearestDist = d; nearest = st; }
+  });
+
+  if (nearest) {
+    if (!activeDiscovery || activeDiscovery.id !== nearest.id) setDiscovery(nearest);
+  } else if (activeDiscovery) {
+    clearDiscovery();
+  }
+}, 500);
+
+function setDiscovery(st) {
+  activeDiscovery = st;
+  const toast = document.getElementById('discovery-toast');
+  const body = document.getElementById('discovery-body');
+  const active = isWithinWindow(st);
+  const solved = !!solvedIds[st.id];
+
+  if (solved) {
+    body.innerHTML = `
+      <div class="led-font text-emerald-400 text-xs tracking-widest mb-1"><i class="fa-solid fa-satellite-dish mr-1"></i> SIGNAL ARCHIVE</div>
+      <div class="text-[11px] text-neutral-400 mb-2">${escapeHtml(st.title)} — already decoded</div>
+      <button id="discovery-replay" class="bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-bold py-1.5 px-4 rounded">REPLAY MESSAGE</button>`;
+    toast.classList.remove('hidden'); toast.classList.add('flex');
+    document.getElementById('discovery-replay').onclick = () => openMessageModal(st, st.decodedPayload || st.payload, true);
+  } else if (active) {
+    body.innerHTML = `
+      <div class="led-font text-amber-400 text-xs tracking-widest mb-1 pulse-gold inline-block px-2 py-0.5 rounded"><i class="fa-solid fa-tower-broadcast mr-1"></i> TRANSMISSION DETECTED</div>
+      <div class="text-[11px] text-neutral-400 mb-2">Unknown signal on this frequency band.</div>
+      <button id="discovery-enter" class="bg-amber-800 hover:bg-amber-700 text-white text-xs font-bold py-1.5 px-4 rounded">ENTER CODE</button>`;
+    toast.classList.remove('hidden'); toast.classList.add('flex');
+    document.getElementById('discovery-enter').onclick = () => openCodeModal(st);
+  } else {
+    const now = Date.now();
+    const upcoming = now < new Date(st.activeFrom).getTime();
+    body.innerHTML = `
+      <div class="led-font text-neutral-400 text-xs tracking-widest mb-1"><i class="fa-solid fa-wave-square mr-1"></i> RESIDUAL SIGNAL — DORMANT</div>
+      <div class="text-[11px] text-neutral-500">${upcoming ? 'This frequency has not begun broadcasting yet.' : 'This frequency has gone silent.'}</div>`;
+    toast.classList.remove('hidden'); toast.classList.add('flex');
+  }
+}
+function clearDiscovery() {
+  activeDiscovery = null;
+  const toast = document.getElementById('discovery-toast');
+  toast.classList.add('hidden'); toast.classList.remove('flex');
+}
+
+/* ---------- code modal ---------- */
+const codeModal = document.getElementById('code-modal');
+let codeModalStation = null;
+function openCodeModal(st) {
+  codeModalStation = st;
+  document.getElementById('code-modal-clue').innerText = 'A hidden broadcast is bleeding through the static here. Enter the access code to decode it.';
+  document.getElementById('code-modal-input').value = '';
+  document.getElementById('code-modal-error').classList.add('hidden');
+  codeModal.classList.remove('hidden'); codeModal.classList.add('flex');
+  setTimeout(() => document.getElementById('code-modal-input').focus(), 50);
+}
+document.getElementById('code-modal-cancel').addEventListener('click', () => {
+  codeModal.classList.add('hidden'); codeModal.classList.remove('flex');
+});
+document.getElementById('code-modal-submit').addEventListener('click', submitCode);
+document.getElementById('code-modal-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCode(); });
+
+function submitCode() {
+  const val = document.getElementById('code-modal-input').value.trim();
+  if (!codeModalStation) return;
+  if (val.toLowerCase() === String(codeModalStation.code).toLowerCase()) {
+    solvedIds[codeModalStation.id] = { at: new Date().toISOString() };
+    saveSolved();
+    codeModal.classList.add('hidden'); codeModal.classList.remove('flex');
+    openMessageModal(codeModalStation, codeModalStation.payload, true);
+  } else {
+    document.getElementById('code-modal-error').classList.remove('hidden');
+  }
+}
+
+/* ---------- message modal ---------- */
+const messageModal = document.getElementById('message-modal');
+let lastDecodedStation = null;
+function openMessageModal(st, payload, autoplay) {
+  lastDecodedStation = st;
+  document.getElementById('message-modal-title').innerText = st.title;
+  const label = st.type === 'morse' ? 'MORSE PAYLOAD (decoded)' : st.type === 'audio' ? 'AUDIO FILE' : 'TRANSCRIPT';
+  document.getElementById('message-modal-body').innerHTML = `<p class="text-neutral-500 text-[10px] uppercase mb-1">${label}</p><p>${escapeHtml(payload)}</p>`;
+  messageModal.classList.remove('hidden'); messageModal.classList.add('flex');
+  if (autoplay) playSecretPayload(st);
+}
+document.getElementById('message-modal-close').addEventListener('click', () => {
+  messageModal.classList.add('hidden'); messageModal.classList.remove('flex');
+});
+document.getElementById('message-modal-replay').addEventListener('click', () => {
+  if (lastDecodedStation) playSecretPayload(lastDecodedStation);
+});
+
+/* ---------- search ---------- */
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (q.length < 2) { searchResults.classList.add('hidden'); return; }
+  const matches = realStations.filter(s =>
+    s.name.toLowerCase().includes(q) || (s.country || '').toLowerCase().includes(q)
+  ).slice(0, 25);
+  if (!matches.length) {
+    searchResults.innerHTML = `<div class="p-3 text-neutral-500">no stations found</div>`;
+  } else {
+    searchResults.innerHTML = matches.map((s, i) => `
+      <div data-idx="${i}" class="search-row px-3 py-2 border-b border-neutral-900 hover:bg-neutral-900 cursor-pointer">
+        <div class="text-neutral-200">${escapeHtml(s.name)}</div>
+        <div class="text-neutral-500 text-[10px] uppercase">${escapeHtml(s.country || '')}</div>
+      </div>`).join('');
+    searchResults.querySelectorAll('.search-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const s = matches[parseInt(row.dataset.idx)];
+        world.pointOfView({ lat: s.lat, lng: s.lng, altitude: 0.4 }, 1200);
+        playLiveStation(s);
+        searchResults.classList.add('hidden');
+        searchInput.value = '';
+      });
+    });
+  }
+  searchResults.classList.remove('hidden');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#search-input') && !e.target.closest('#search-results')) searchResults.classList.add('hidden');
+});
+
+document.getElementById('shuffle-btn').addEventListener('click', () => {
+  if (!realStations.length) return;
+  const s = realStations[Math.floor(Math.random() * realStations.length)];
+  world.pointOfView({ lat: s.lat, lng: s.lng, altitude: 0.4 }, 1200);
+  playLiveStation(s);
+});
+
+/* ---------- GM panel ---------- */
+const gmModal = document.getElementById('gm-modal');
+document.getElementById('open-gm-panel').addEventListener('click', () => { renderGMList(); gmModal.classList.remove('hidden'); gmModal.classList.add('flex'); });
+document.getElementById('close-gm-panel').addEventListener('click', () => { gmModal.classList.add('hidden'); gmModal.classList.remove('flex'); });
+
+document.getElementById('new-type').addEventListener('change', (e) => {
+  const label = document.getElementById('payload-label');
+  label.innerText = e.target.value === 'audio' ? 'AUDIO FILE URL (prerecorded message)' : 'TRANSCRIPT / SPEECH / MORSE PAYLOAD';
+});
+
+function renderGMList() {
+  const container = document.getElementById('gm-station-list');
+  container.innerHTML = '';
+  document.getElementById('gm-empty-note').classList.toggle('hidden', secretStations.length > 0);
+
+  secretStations.forEach((st) => {
+    const active = isWithinWindow(st);
+    const row = document.createElement('div');
+    row.className = 'bg-neutral-950 p-3 rounded border border-neutral-800 text-xs';
+    row.innerHTML = `
+      <div class="flex justify-between items-start gap-2">
+        <div class="min-w-0">
+          <span class="font-bold ${active ? 'text-emerald-400' : 'text-neutral-300'}">${escapeHtml(st.title)}</span>
+          <span class="text-neutral-500">(${st.type.toUpperCase()}${st.markerVisible ? ' • VISIBLE MARKER' : ' • HIDDEN'})</span>
+          <div class="text-neutral-500 mt-1">lat ${st.lat.toFixed(4)}, lng ${st.lng.toFixed(4)} • code <span class="text-amber-400">${escapeHtml(st.code)}</span></div>
+          <div class="text-neutral-600">${new Date(st.activeFrom).toLocaleString()} → ${new Date(st.activeUntil).toLocaleString()} ${active ? '<span class="text-emerald-500">• LIVE NOW</span>' : ''}</div>
+          ${st.clue ? `<div class="text-neutral-500 italic mt-1">clue: ${escapeHtml(st.clue)}</div>` : ''}
+          ${solvedIds[st.id] ? `<div class="text-emerald-600 mt-1"><i class="fa-solid fa-check"></i> solved by a player</div>` : ''}
+        </div>
+        <div class="flex flex-col gap-1 shrink-0">
+          <button data-edit="${st.id}" class="text-sky-400 hover:text-sky-300 px-2 py-1 bg-sky-950 border border-sky-800 rounded text-[10px]">EDIT</button>
+          <button data-del="${st.id}" class="text-red-400 hover:text-red-300 px-2 py-1 bg-red-950 border border-red-800 rounded text-[10px]">DELETE</button>
+        </div>
+      </div>`;
+    container.appendChild(row);
+  });
+
+  container.querySelectorAll('[data-del]').forEach(btn => btn.addEventListener('click', () => {
+    secretStations = secretStations.filter(s => s.id !== btn.dataset.del);
+    saveSecrets(); renderGMList(); refreshPoints();
+  }));
+  container.querySelectorAll('[data-edit]').forEach(btn => btn.addEventListener('click', () => loadIntoForm(btn.dataset.edit)));
+}
+
+function toLocalInputValue(iso) {
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function loadIntoForm(id) {
+  const st = secretStations.find(s => s.id === id);
+  if (!st) return;
+  document.getElementById('edit-id').value = st.id;
+  document.getElementById('new-title').value = st.title;
+  document.getElementById('new-code').value = st.code;
+  document.getElementById('new-lat').value = st.lat;
+  document.getElementById('new-lng').value = st.lng;
+  document.getElementById('new-active-from').value = toLocalInputValue(st.activeFrom);
+  document.getElementById('new-active-until').value = toLocalInputValue(st.activeUntil);
+  document.getElementById('new-marker-visible').value = String(st.markerVisible);
+  document.getElementById('new-type').value = st.type;
+  document.getElementById('new-payload').value = st.payload;
+  document.getElementById('new-clue').value = st.clue || '';
+  document.getElementById('gm-form-heading').innerText = 'EDIT HIDDEN STATION';
+  document.getElementById('save-station-btn').innerText = 'SAVE CHANGES';
+  document.getElementById('cancel-edit-btn').classList.remove('hidden');
+}
+
+function resetForm() {
+  document.getElementById('edit-id').value = '';
+  ['new-title','new-code','new-lat','new-lng','new-active-from','new-active-until','new-payload','new-clue'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('new-marker-visible').value = 'false';
+  document.getElementById('new-type').value = 'speech';
+  document.getElementById('gm-form-heading').innerText = 'ADD NEW HIDDEN STATION';
+  document.getElementById('save-station-btn').innerText = '+ SAVE HIDDEN STATION';
+  document.getElementById('cancel-edit-btn').classList.add('hidden');
+}
+document.getElementById('cancel-edit-btn').addEventListener('click', resetForm);
+
+document.getElementById('use-current-view').addEventListener('click', () => {
+  const pov = world.pointOfView();
+  document.getElementById('new-lat').value = pov.lat.toFixed(4);
+  document.getElementById('new-lng').value = pov.lng.toFixed(4);
+});
+
+document.getElementById('save-station-btn').addEventListener('click', () => {
+  const id = document.getElementById('edit-id').value;
+  const title = document.getElementById('new-title').value.trim();
+  const code = document.getElementById('new-code').value.trim();
+  const lat = parseFloat(document.getElementById('new-lat').value);
+  const lng = parseFloat(document.getElementById('new-lng').value);
+  const activeFromRaw = document.getElementById('new-active-from').value;
+  const activeUntilRaw = document.getElementById('new-active-until').value;
+  const markerVisible = document.getElementById('new-marker-visible').value === 'true';
+  const type = document.getElementById('new-type').value;
+  const payload = document.getElementById('new-payload').value.trim();
+  const clue = document.getElementById('new-clue').value.trim();
+
+  if (!title || !code || isNaN(lat) || isNaN(lng) || !activeFromRaw || !activeUntilRaw || !payload) {
+    alert('Please fill out title, code, coordinates, both dates, and the payload.');
+    return;
+  }
+
+  const record = {
+    id: id || ('sec-' + Date.now()),
+    title, code, lat, lng,
+    activeFrom: new Date(activeFromRaw).toISOString(),
+    activeUntil: new Date(activeUntilRaw).toISOString(),
+    markerVisible, type, payload, clue
+  };
+
+  if (id) {
+    secretStations = secretStations.map(s => s.id === id ? record : s);
+  } else {
+    secretStations.push(record);
+  }
+  saveSecrets();
+  resetForm();
+  renderGMList();
+  refreshPoints();
+});
+
+/* ---------- boot ---------- */
+loadRealStations();
+refreshPoints();
+</script>
+</body>
+</html>
